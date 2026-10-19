@@ -1,0 +1,26 @@
+# IDE
+.idea/
+.vscode/
+.vs/
+*.iml
+pyrightconfig.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Environment
+.env
+
+# macOS
+.DS_Store
+
+# Outputs
+outputs/
+
+# Coverage & Testing
+.coverage*
+htmlcov/
+.pytest_cache/
