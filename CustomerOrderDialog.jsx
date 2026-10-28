@@ -1,0 +1,248 @@
+import { useEffect, useMemo, useState } from "react";
+import { Minus, Plus, Search, ShoppingBag, X } from "lucide-react";
+import { getOrderCatalog } from "../services/productsApi";
+import { placeCustomerOrder } from "../services/ordersApi";
+import "../styles/CustomerOrderDialog.css";
+
+function defaultDeliveryDate() {
+  const date = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+  date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
+  return date.toISOString().slice(0, 16);
+}
+
+function formatCurrency(value) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+  }).format(Number(value) || 0);
+}
+
+function CustomerOrderDialog({ initialProfile, onClose, onCreated }) {
+  const [search, setSearch] = useState("");
+  const [products, setProducts] = useState([]);
+  const [selected, setSelected] = useState([]);
+  const [zipCode, setZipCode] = useState("");
+  const [city, setCity] = useState(initialProfile?.city || "");
+  const [state, setState] = useState(initialProfile?.state || "");
+  const [paymentType, setPaymentType] = useState("credit_card");
+  const [installments, setInstallments] = useState("1");
+  const [deliveryDate, setDeliveryDate] = useState(defaultDeliveryDate);
+  const [loadingCatalog, setLoadingCatalog] = useState(true);
+  const [catalogError, setCatalogError] = useState("");
+  const [submitError, setSubmitError] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    const timer = window.setTimeout(() => {
+      setLoadingCatalog(true);
+      setCatalogError("");
+      getOrderCatalog({ search, limit: 60 })
+        .then((result) => {
+          if (active) setProducts(result.products || []);
+        })
+        .catch((error) => {
+          if (active) setCatalogError(error.message || "Unable to load products.");
+        })
+        .finally(() => {
+          if (active) setLoadingCatalog(false);
+        });
+    }, search ? 250 : 0);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [search]);
+
+  const itemCount = selected.reduce((total, item) => total + item.quantity, 0);
+  const estimatedTotal = useMemo(() => selected.reduce(
+    (total, item) => total + item.quantity * (item.unit_price + item.unit_freight),
+    0,
+  ), [selected]);
+
+  const addProduct = (product) => {
+    setSelected((current) => {
+      if (current.reduce((total, item) => total + item.quantity, 0) >= 100) return current;
+      const match = current.find((item) => item.product_id === product.product_id);
+      if (match) {
+        return current.map((item) => item.product_id === product.product_id
+          ? { ...item, quantity: item.quantity + 1 }
+          : item);
+      }
+      return [...current, {
+        product_id: product.product_id,
+        quantity: 1,
+        unit_price: Number(product.unit_price) || 0,
+        unit_freight: Number(product.unit_freight) || 0,
+      }];
+    });
+  };
+
+  const changeQuantity = (productId, delta) => {
+    setSelected((current) => current
+      .map((item) => item.product_id === productId
+        ? { ...item, quantity: Math.max(0, Math.min(100, item.quantity + delta)) }
+        : item)
+      .filter((item) => item.quantity > 0));
+  };
+
+  const submitOrder = async (event) => {
+    event.preventDefault();
+    setSubmitError("");
+    if (!selected.length) {
+      setSubmitError("Choose at least one product to continue.");
+      return;
+    }
+    try {
+      setSaving(true);
+      const result = await placeCustomerOrder({
+        customer_zip_code_prefix: zipCode.trim(),
+        customer_city: city.trim(),
+        customer_state: state.trim().toUpperCase(),
+        order_items: selected.map(({ product_id, quantity }) => ({
+          product_id,
+          quantity,
+        })),
+        payment_type: paymentType,
+        payment_installments: Number(installments),
+        estimated_delivery_date: new Date(deliveryDate).toISOString(),
+      });
+      onCreated(result);
+    } catch (error) {
+      setSubmitError(error.message || "Your order could not be placed.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="customer-order-overlay" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget && !saving) onClose();
+    }}>
+      <section className="customer-order-dialog" role="dialog" aria-modal="true" aria-labelledby="customer-order-title">
+        <header className="customer-order-header">
+          <div className="customer-order-title-icon"><ShoppingBag size={21} /></div>
+          <div>
+            <h2 id="customer-order-title">Place an order</h2>
+            <p>Choose products and enter the delivery address for this order.</p>
+          </div>
+          <button type="button" aria-label="Close" onClick={onClose} disabled={saving}><X size={20} /></button>
+        </header>
+
+        <form onSubmit={submitOrder}>
+          <div className="customer-order-fields">
+            <label>
+              Delivery ZIP code
+              <input
+                value={zipCode}
+                onChange={(event) => setZipCode(event.target.value)}
+                maxLength={5}
+                required
+                placeholder="Enter your ZIP code"
+              />
+            </label>
+            <label>
+              City
+              <input
+                value={city}
+                onChange={(event) => setCity(event.target.value)}
+                maxLength={64}
+                required
+                placeholder="Enter your city"
+              />
+            </label>
+            <label>
+              State code
+              <input
+                value={state}
+                onChange={(event) => setState(event.target.value.toUpperCase())}
+                maxLength={2}
+                minLength={2}
+                required
+                placeholder="e.g. SP"
+              />
+            </label>
+            <label>
+              Estimated delivery
+              <input
+                type="datetime-local"
+                value={deliveryDate}
+                onChange={(event) => setDeliveryDate(event.target.value)}
+                required
+              />
+            </label>
+          </div>
+
+          <label className="customer-order-search">
+            <Search size={17} />
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search products or categories"
+              aria-label="Search products"
+            />
+          </label>
+
+          <div className="customer-order-catalog" aria-live="polite">
+            {loadingCatalog ? <p className="customer-order-empty">Loading products…</p> : catalogError ? (
+              <p className="customer-order-error" role="alert">{catalogError}</p>
+            ) : products.length ? products.map((product) => {
+              const selectedProduct = selected.find((item) => item.product_id === product.product_id);
+              return (
+                <article key={product.product_id} className="customer-order-product">
+                  <div>
+                    <strong>{String(product.category || "Product").replaceAll("_", " ")}</strong>
+                    <span>{product.product_id}</span>
+                    <small>{formatCurrency(product.unit_price)} + {formatCurrency(product.unit_freight)} estimated shipping</small>
+                  </div>
+                  {selectedProduct ? (
+                    <div className="customer-order-quantity">
+                      <button type="button" aria-label="Remove one" onClick={() => changeQuantity(product.product_id, -1)}><Minus size={15} /></button>
+                      <span>{selectedProduct.quantity}</span>
+                      <button type="button" aria-label="Add one" disabled={itemCount >= 100} onClick={() => addProduct(product)}><Plus size={15} /></button>
+                    </div>
+                  ) : (
+                    <button type="button" className="customer-order-add" disabled={itemCount >= 100} onClick={() => addProduct(product)}>
+                      <Plus size={15} /> Add
+                    </button>
+                  )}
+                </article>
+              );
+            }) : <p className="customer-order-empty">No matching products are available.</p>}
+          </div>
+
+          <div className="customer-order-payment-fields">
+            <label>
+              Payment method
+              <select value={paymentType} onChange={(event) => setPaymentType(event.target.value)}>
+                <option value="credit_card">Credit card</option>
+                <option value="debit_card">Debit card</option>
+                <option value="boleto">Boleto</option>
+                <option value="voucher">Voucher</option>
+              </select>
+            </label>
+            <label>
+              Installments
+              <select value={installments} onChange={(event) => setInstallments(event.target.value)}>
+                {Array.from({ length: 24 }, (_, index) => index + 1).map((count) => (
+                  <option key={count} value={count}>{count} {count === 1 ? "installment" : "installments"}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          {submitError && <div className="customer-order-error" role="alert">{submitError}</div>}
+          <footer className="customer-order-footer">
+            <div><span>{itemCount} {itemCount === 1 ? "item" : "items"}</span><strong>Est. {formatCurrency(estimatedTotal)}</strong></div>
+            <button type="button" className="customer-order-cancel" onClick={onClose} disabled={saving}>Cancel</button>
+            <button type="submit" className="customer-order-submit" disabled={saving || loadingCatalog || Boolean(catalogError) || !selected.length || !zipCode.trim()}>
+              {saving ? "Placing order…" : "Place order"}
+            </button>
+          </footer>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+export default CustomerOrderDialog;

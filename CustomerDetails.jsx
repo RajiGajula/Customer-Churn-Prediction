@@ -1,0 +1,1537 @@
+import React, {
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+
+import {
+  useParams,
+  useNavigate,
+} from "react-router-dom";
+
+import {
+  ArrowLeft,
+  RefreshCw,
+  User,
+  MapPin,
+  ShoppingBag,
+  AlertTriangle,
+  ShieldCheck,
+  Activity,
+  Wallet,
+  Calendar,
+  Clock3,
+  Send,
+} from "lucide-react";
+
+import "../styles/CustomerIntelligence.css";
+
+const API_URL =
+  import.meta.env.VITE_API_URL ||
+  "http://127.0.0.1:8000";
+
+function CustomerDetails() {
+  const { customerId } = useParams();
+
+  const navigate = useNavigate();
+
+  const [data, setData] = useState(null);
+
+  const [loading, setLoading] =
+    useState(true);
+
+  const [error, setError] =
+    useState("");
+
+  const [timeline, setTimeline] = useState([]);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [timelineError, setTimelineError] = useState("");
+  const [campaignSaving, setCampaignSaving] = useState(false);
+  const [campaignActionError, setCampaignActionError] = useState("");
+  const [campaignActionSuccess, setCampaignActionSuccess] = useState("");
+
+  // =========================================================
+  // AUTH TOKEN
+  // =========================================================
+
+  const getToken = () => {
+    return (
+      localStorage.getItem(
+        "access_token"
+      ) ||
+      localStorage.getItem("token")
+    );
+  };
+
+  const loadTimeline = async (profileId) => {
+    setTimelineLoading(true);
+    setTimelineError("");
+    try {
+      const token = getToken();
+      const response = await fetch(
+        `${API_URL}/api/v1/consumer-profiles/${profileId}/timeline?limit=100`,
+        {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        }
+      );
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.detail || "Unable to load customer activity.");
+      }
+      setTimeline(Array.isArray(result.timeline) ? result.timeline : []);
+    } catch (timelineLoadError) {
+      console.error("Customer timeline API error:", timelineLoadError);
+      setTimeline([]);
+      setTimelineError(
+        timelineLoadError.message || "Unable to load customer activity."
+      );
+    } finally {
+      setTimelineLoading(false);
+    }
+  };
+
+  // =========================================================
+  // LOAD CUSTOMER DETAILS
+  // =========================================================
+
+  const loadCustomer = async () => {
+    if (!customerId) {
+      setError(
+        "Customer ID was not provided."
+      );
+
+      setLoading(false);
+
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      setError("");
+
+      const token = getToken();
+
+      const response = await fetch(
+        `${API_URL}/api/v1/members/${encodeURIComponent(
+          customerId
+        )}/risk`,
+        {
+          method: "GET",
+
+          headers: {
+            "Content-Type":
+              "application/json",
+
+            ...(token
+              ? {
+                  Authorization:
+                    `Bearer ${token}`,
+                }
+              : {}),
+          },
+        }
+      );
+
+      const result =
+        await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          result.detail ||
+            "Unable to load customer details."
+        );
+      }
+
+      console.log(
+        "Customer Risk API Response:",
+        result
+      );
+
+      setData(result);
+      setTimeline([]);
+      setCampaignActionError("");
+      setCampaignActionSuccess("");
+      if (result.customer?.consumer_profile_id) {
+        loadTimeline(result.customer.consumer_profile_id);
+      } else {
+        setTimelineError("");
+      }
+    } catch (err) {
+      console.error(
+        "Customer details API error:",
+        err
+      );
+
+      setData(null);
+
+      setError(
+        err.message ||
+          "Unable to load customer details."
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // =========================================================
+  // INITIAL LOAD
+  // =========================================================
+
+  useEffect(() => {
+    loadCustomer();
+  }, [customerId]);
+
+  // =========================================================
+  // BACKEND RESPONSE OBJECTS
+  // =========================================================
+
+  const customer =
+    data?.customer || {};
+
+  const prediction =
+    data?.prediction || {};
+
+  const riskTier =
+    prediction?.risk_tier;
+
+  const campaign =
+    data?.campaign_recommendation ||
+    null;
+
+  const campaignName =
+    campaign?.campaign_name ||
+    campaign?.name ||
+    campaign?.title ||
+    campaign?.recommendation ||
+    null;
+
+  const isAdmin = (() => {
+    try {
+      const user = JSON.parse(localStorage.getItem("user") || "{}");
+      return String(
+        user?.user?.role || user?.role || localStorage.getItem("role") || ""
+      ).toLowerCase() === "admin";
+    } catch {
+      return String(localStorage.getItem("role") || "").toLowerCase() === "admin";
+    }
+  })();
+
+  const hasCampaignAssignment = Boolean(campaignName) && timeline.some(
+    (event) =>
+      event.event_type === "campaign_assignment" &&
+      String(event.description || "").toLowerCase().includes(campaignName.toLowerCase())
+  );
+
+  const recordCampaignAssignment = async () => {
+    const profileId = customer.consumer_profile_id;
+    if (!profileId || !campaignName) {
+      setCampaignActionError("This customer does not have a linked profile or campaign recommendation.");
+      return;
+    }
+    setCampaignSaving(true);
+    setCampaignActionError("");
+    setCampaignActionSuccess("");
+    try {
+      const token = getToken();
+      const response = await fetch(
+        `${API_URL}/api/v1/consumer-profiles/${profileId}/interactions`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({
+            interaction_type: "campaign_assignment",
+            channel: "Campaign",
+            subject: `Campaign assigned: ${campaignName}`,
+            details: `Recorded assignment of recommended campaign "${campaignName}" for ${riskTier || "unclassified"} churn risk.`,
+          }),
+        }
+      );
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.detail || "Unable to record campaign assignment.");
+      }
+      setCampaignActionSuccess("Campaign assignment recorded in customer activity. No message was sent.");
+      await loadTimeline(profileId);
+    } catch (assignmentError) {
+      console.error("Campaign assignment error:", assignmentError);
+      setCampaignActionError(
+        assignmentError.message || "Unable to record campaign assignment."
+      );
+    } finally {
+      setCampaignSaving(false);
+    }
+  };
+
+  const valueTier =
+    data?.value_tier ||
+    campaign?.value_tier ||
+    "Medium";
+
+  const isValueTierProvisional =
+    data?.value_tier_is_provisional ??
+    campaign?.value_tier_is_provisional ??
+    false;
+
+  // =========================================================
+  // VALUES FROM BACKEND
+  // =========================================================
+
+  const churnProbability =
+    prediction?.churn_probability;
+
+  const status =
+    prediction?.status;
+
+  const reasonCodes =
+    prediction?.reason_codes || [];
+
+  const shapValues =
+    prediction?.shap_values || {};
+
+  const topFactors =
+    prediction?.top_factors || [];
+
+  // =========================================================
+  // FORMAT PROBABILITY
+  // =========================================================
+
+  const formatProbability = (
+    value
+  ) => {
+    if (
+      value === null ||
+      value === undefined
+    ) {
+      return "N/A";
+    }
+
+    const number =
+      Number(value);
+
+    if (Number.isNaN(number)) {
+      return "N/A";
+    }
+
+    return `${(
+      number * 100
+    ).toFixed(1)}%`;
+  };
+
+  // =========================================================
+  // FORMAT DATE
+  // =========================================================
+
+  const formatDate = (
+    value
+  ) => {
+    if (!value) {
+      return "N/A";
+    }
+
+    const date =
+      new Date(value);
+
+    if (
+      Number.isNaN(
+        date.getTime()
+      )
+    ) {
+      return value;
+    }
+
+    return date.toLocaleDateString(
+      "en-IN",
+      {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      }
+    );
+  };
+
+  // =========================================================
+  // RISK CLASS
+  // =========================================================
+
+  const getRiskClass = () => {
+    if (
+      riskTier === "high"
+    ) {
+      return "high";
+    }
+
+    if (
+      riskTier === "medium"
+    ) {
+      return "medium";
+    }
+
+    if (
+      riskTier === "low"
+    ) {
+      return "low";
+    }
+
+    return "unknown";
+  };
+
+  // =========================================================
+  // RISK LABEL
+  // =========================================================
+
+  const riskLabel =
+    status ||
+    (
+      riskTier === "high"
+        ? "High Risk"
+        : riskTier === "medium"
+        ? "At Risk"
+        : riskTier === "low"
+        ? "Low Risk"
+        : "Unknown"
+    );
+
+  // =========================================================
+  // EXPLANATION DATA
+  // =========================================================
+
+  const explanationItems =
+    useMemo(() => {
+
+      // -----------------------------------------------
+      // TOP FACTORS
+      // -----------------------------------------------
+
+      if (
+        Array.isArray(topFactors) &&
+        topFactors.length > 0
+      ) {
+        return topFactors.map(
+          (factor, index) => ({
+            id:
+              `factor-${index}`,
+
+            label:
+              factor?.feature ||
+              factor?.name ||
+              factor?.label ||
+              "Risk factor",
+
+            value:
+              factor?.value ??
+              factor?.impact ??
+              factor?.shap_value ??
+              null,
+          })
+        );
+      }
+
+      // -----------------------------------------------
+      // REASON CODES
+      // -----------------------------------------------
+
+      if (
+        Array.isArray(reasonCodes) &&
+        reasonCodes.length > 0
+      ) {
+        return reasonCodes.map(
+          (reason, index) => ({
+            id:
+              `reason-${index}`,
+
+            label:
+              typeof reason ===
+              "string"
+                ? reason
+                : reason?.reason ||
+                  reason?.label ||
+                  reason?.feature ||
+                  "Risk factor",
+
+            value:
+              typeof reason ===
+              "object"
+                ? reason?.value
+                : null,
+          })
+        );
+      }
+
+      // -----------------------------------------------
+      // SHAP VALUES
+      // -----------------------------------------------
+
+      if (
+        shapValues &&
+        typeof shapValues ===
+          "object"
+      ) {
+        return Object.entries(
+          shapValues
+        )
+          .map(
+            (
+              [key, value],
+              index
+            ) => ({
+              id:
+                `shap-${index}`,
+
+              label: key,
+
+              value,
+            })
+          )
+          .sort(
+            (a, b) =>
+              Math.abs(
+                Number(b.value) ||
+                  0
+              ) -
+              Math.abs(
+                Number(a.value) ||
+                  0
+              )
+          )
+          .slice(0, 10);
+      }
+
+      return [];
+
+    }, [
+      topFactors,
+      reasonCodes,
+      shapValues,
+    ]);
+
+  // =========================================================
+  // LOADING
+  // =========================================================
+
+  if (loading) {
+    return (
+      <div
+        className="ci-page"
+        style={{
+          padding: "40px",
+        }}
+      >
+        <div
+          style={{
+            textAlign: "center",
+            padding: "60px",
+          }}
+        >
+          <RefreshCw
+            size={32}
+            className="ci-spin"
+          />
+
+          <p>
+            Loading customer
+            details...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // =========================================================
+  // ERROR
+  // =========================================================
+
+  if (error) {
+    return (
+      <div
+        className="ci-page"
+        style={{
+          padding: "40px",
+        }}
+      >
+        <button
+          type="button"
+          className="ci-back-button"
+          onClick={() =>
+            navigate(-1)
+          }
+        >
+          <ArrowLeft size={18} />
+        </button>
+
+        <div
+          style={{
+            marginTop: "30px",
+            padding: "25px",
+            borderRadius: "10px",
+            background:
+              "#fff1f2",
+            border:
+              "1px solid #fecdd3",
+            color: "#be123c",
+          }}
+        >
+          <strong>
+            Unable to load
+            customer details
+          </strong>
+
+          <p>
+            {error}
+          </p>
+
+          <button
+            type="button"
+            onClick={
+              loadCustomer
+            }
+            className="ci-view-button"
+          >
+            Try Again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // =========================================================
+  // MAIN PAGE
+  // =========================================================
+
+  return (
+    <div className="ci-page">
+
+      {/* ================================================= */}
+      {/* HEADER */}
+      {/* ================================================= */}
+
+      <div className="ci-page-header">
+
+        <div>
+
+          <button
+            type="button"
+            className="ci-back-button"
+            onClick={() =>
+              navigate(-1)
+            }
+          >
+            <ArrowLeft
+              size={18}
+            />
+          </button>
+
+          <div
+            className="ci-title-wrapper"
+          >
+            <h1>
+              Customer Details
+            </h1>
+
+            <p>
+              Customer profile,
+              churn risk and
+              prediction details.
+            </p>
+          </div>
+
+        </div>
+
+        <button
+          type="button"
+          className="ci-filter-button"
+          onClick={
+            loadCustomer
+          }
+        >
+          <RefreshCw
+            size={16}
+          />
+
+          Refresh
+        </button>
+
+      </div>
+
+      {/* ================================================= */}
+      {/* CUSTOMER PROFILE */}
+      {/* ================================================= */}
+
+      <div className="ci-card ci-customer-identity-card">
+
+        <div
+          style={{
+            display:
+              "flex",
+            alignItems:
+              "center",
+            gap: "20px",
+            flexWrap:
+              "wrap",
+          }}
+        >
+
+          <div
+            className="ci-avatar"
+            style={{
+              width: "60px",
+              height: "60px",
+            }}
+          >
+            <User
+              size={28}
+            />
+          </div>
+
+          <div
+            style={{
+              flex: 1,
+            }}
+          >
+
+            <h2
+              style={{
+                margin: 0,
+              }}
+            >
+              {customer.name || customer.customer_unique_id || customerId}
+            </h2>
+
+            <p
+              style={{
+                margin:
+                  "6px 0 0",
+                color:
+                  "#64748b",
+              }}
+            >
+              {customer.customer_unique_id || customerId}
+            </p>
+
+          </div>
+
+          <div
+            className={`ci-risk-badge ${getRiskClass()}`}
+          >
+            {riskLabel}
+          </div>
+
+        </div>
+
+      </div>
+
+      {/* ================================================= */}
+      {/* RISK SUMMARY */}
+      {/* ================================================= */}
+
+      <div
+        className="ci-risk-summary-grid"
+        style={{
+          display:
+            "grid",
+
+          gridTemplateColumns:
+            "repeat(auto-fit, minmax(220px, 1fr))",
+
+          gap: "18px",
+
+          marginTop:
+            "20px",
+        }}
+      >
+
+        {/* CHURN PROBABILITY */}
+
+        <div className={`ci-card ci-risk-metric-card ci-risk-probability ${getRiskClass()}`}>
+
+          <div
+            style={{
+              display:
+                "flex",
+
+              alignItems:
+                "center",
+
+              gap: "12px",
+            }}
+          >
+            <Activity
+              size={22}
+            />
+
+            <span>
+              Churn Probability
+            </span>
+          </div>
+
+          <h2
+            style={{
+              margin:
+                "15px 0 0",
+            }}
+          >
+            {formatProbability(
+              churnProbability
+            )}
+          </h2>
+
+        </div>
+
+        {/* RISK TIER */}
+
+        <div className={`ci-card ci-risk-metric-card ci-risk-tier-metric ${getRiskClass()}`}>
+
+          <div
+            style={{
+              display:
+                "flex",
+
+              alignItems:
+                "center",
+
+              gap: "12px",
+            }}
+          >
+
+            {riskTier ===
+              "high" ||
+            riskTier ===
+              "medium" ? (
+              <AlertTriangle
+                size={22}
+              />
+            ) : (
+              <ShieldCheck
+                size={22}
+              />
+            )}
+
+            <span>
+              Risk Tier
+            </span>
+
+          </div>
+
+          <h2
+            style={{
+              margin:
+                "15px 0 0",
+
+              textTransform:
+                "capitalize",
+            }}
+          >
+            {riskTier ||
+              "Unknown"}
+          </h2>
+
+        </div>
+
+        <div className="ci-card ci-risk-metric-card ci-value-tier-metric">
+          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+            <Wallet size={22} />
+            <span>Value Tier</span>
+          </div>
+          <h2 style={{ margin: "15px 0 0" }}>
+            {valueTier}
+            {isValueTierProvisional && (
+              <small className="ci-provisional-value-tier">Provisional</small>
+            )}
+          </h2>
+        </div>
+
+        {/* TOTAL ORDERS */}
+
+        <div className="ci-card ci-risk-metric-card ci-orders-metric">
+
+          <div
+            style={{
+              display:
+                "flex",
+
+              alignItems:
+                "center",
+
+              gap: "12px",
+            }}
+          >
+
+            <ShoppingBag
+              size={22}
+            />
+
+            <span>
+              Total Orders
+            </span>
+
+          </div>
+
+          <h2
+            style={{
+              margin:
+                "15px 0 0",
+            }}
+          >
+            {customer.total_orders ??
+              0}
+          </h2>
+
+        </div>
+
+        {/* LOCATION */}
+
+        <div className="ci-card ci-risk-metric-card ci-location-metric">
+
+          <div
+            style={{
+              display:
+                "flex",
+
+              alignItems:
+                "center",
+
+              gap: "12px",
+            }}
+          >
+
+            <MapPin
+              size={22}
+            />
+
+            <span>
+              Location
+            </span>
+
+          </div>
+
+          <h3
+            style={{
+              margin:
+                "15px 0 0",
+            }}
+          >
+            {customer.customer_city ||
+              "N/A"}
+
+            {customer.customer_city &&
+              customer.customer_state
+              ? `, ${customer.customer_state}`
+              : ""}
+          </h3>
+
+        </div>
+
+      </div>
+
+      {/* ================================================= */}
+      {/* CUSTOMER ACTIVITY */}
+      {/* ================================================= */}
+
+      <div
+        className="ci-card ci-customer-activity-card"
+        style={{
+          marginTop:
+            "20px",
+        }}
+      >
+
+        <h2 className="ci-profile-section-title">
+          Customer Activity
+        </h2>
+
+        <div
+          style={{
+            display:
+              "grid",
+
+            gridTemplateColumns:
+              "repeat(auto-fit, minmax(220px, 1fr))",
+
+            gap: "20px",
+
+            marginTop:
+              "20px",
+          }}
+        >
+
+          {/* CUSTOMER SINCE */}
+
+          <div>
+
+            <span
+              style={{
+                color:
+                  "#64748b",
+              }}
+            >
+              Customer Since
+            </span>
+
+            <strong
+              style={{
+                display:
+                  "block",
+
+                marginTop:
+                  "8px",
+              }}
+            >
+              {formatDate(
+                customer.customer_since
+              )}
+            </strong>
+
+          </div>
+
+          {/* LAST PURCHASE */}
+
+          <div>
+
+            <span
+              style={{
+                color:
+                  "#64748b",
+              }}
+            >
+              Last Purchase
+            </span>
+
+            <strong
+              style={{
+                display:
+                  "block",
+
+                marginTop:
+                  "8px",
+              }}
+            >
+              {formatDate(
+                customer.last_purchase
+              )}
+            </strong>
+
+          </div>
+
+          {/* TOTAL SPENT */}
+
+          <div>
+
+            <span
+              style={{
+                color:
+                  "#64748b",
+              }}
+            >
+              Total Spent
+            </span>
+
+            <strong
+              style={{
+                display:
+                  "block",
+
+                marginTop:
+                  "8px",
+              }}
+            >
+              ₹
+              {Number(
+                customer.total_spent ||
+                  0
+              ).toLocaleString(
+                "en-IN",
+                {
+                  maximumFractionDigits:
+                    2,
+                }
+              )}
+            </strong>
+
+          </div>
+
+          {/* CUSTOMER LOCATION */}
+
+          <div>
+
+            <span
+              style={{
+                color:
+                  "#64748b",
+              }}
+            >
+              Location
+            </span>
+
+            <strong
+              style={{
+                display:
+                  "block",
+
+                marginTop:
+                  "8px",
+              }}
+            >
+              {customer.customer_city ||
+                "N/A"}
+
+              {customer.customer_city &&
+                customer.customer_state
+                ? `, ${customer.customer_state}`
+                : ""}
+            </strong>
+
+          </div>
+
+          {customer.email && (
+            <div>
+              <span style={{ color: "#64748b" }}>Email</span>
+              <strong style={{ display: "block", marginTop: "8px", overflowWrap: "anywhere" }}>
+                {customer.email}
+              </strong>
+            </div>
+          )}
+
+          {customer.phone && (
+            <div>
+              <span style={{ color: "#64748b" }}>Phone</span>
+              <strong style={{ display: "block", marginTop: "8px" }}>
+                {customer.phone}
+              </strong>
+            </div>
+          )}
+
+          {customer.address && (
+            <div>
+              <span style={{ color: "#64748b" }}>Address</span>
+              <strong style={{ display: "block", marginTop: "8px", overflowWrap: "anywhere" }}>
+                {customer.address}
+              </strong>
+            </div>
+          )}
+
+          {customer.customer_zip_code_prefix && (
+            <div>
+              <span style={{ color: "#64748b" }}>ZIP Code</span>
+              <strong style={{ display: "block", marginTop: "8px" }}>
+                {customer.customer_zip_code_prefix}
+              </strong>
+            </div>
+          )}
+
+        </div>
+
+      </div>
+
+      <div className="ci-card ci-customer-timeline-card">
+        <div className="ci-timeline-heading">
+          <div>
+            <h2 className="ci-profile-section-title">Activity timeline</h2>
+            <p>Recent orders, feedback, profile changes, and campaign actions.</p>
+          </div>
+          {timelineLoading && <span>Loading activity...</span>}
+        </div>
+        {timelineError ? (
+          <p className="ci-inline-error" role="alert">{timelineError}</p>
+        ) : timeline.length ? (
+          <ol className="ci-activity-timeline">
+            {timeline.map((event) => (
+              <li key={event.event_id}>
+                <span className="ci-timeline-dot"><Clock3 size={14} /></span>
+                <div>
+                  <div className="ci-timeline-event-heading">
+                    <strong>{String(event.event_type || "activity").replaceAll("_", " ")}</strong>
+                    <time>{event.occurred_at ? new Date(event.occurred_at).toLocaleString() : "Date unavailable"}</time>
+                  </div>
+                  <p>{event.description}</p>
+                </div>
+              </li>
+            ))}
+          </ol>
+        ) : !timelineLoading ? (
+          <p className="ci-timeline-empty">
+            {data?.customer?.consumer_profile_id
+              ? "No customer activity has been recorded yet."
+              : "Activity timeline is not available for this customer."}
+          </p>
+        ) : null}
+      </div>
+
+      {/* ================================================= */}
+      {/* CHURN RISK FACTORS */}
+      {/* ================================================= */}
+
+      <div
+        className="ci-card ci-risk-factors-card"
+        style={{
+          marginTop:
+            "20px",
+        }}
+      >
+
+        <h2 className="ci-profile-section-title">
+          Churn Model Contributions
+        </h2>
+
+        <p
+          style={{
+            color:
+              "#64748b",
+          }}
+        >
+          Values are signed SHAP contributions, not customer measurements. Negative values lower predicted churn; positive values raise it.
+        </p>
+
+        {explanationItems.length ===
+        0 ? (
+
+          <div
+            style={{
+              padding:
+                "25px 0",
+
+              color:
+                "#64748b",
+            }}
+          >
+            No explainability
+            information is
+            available for this
+            customer.
+          </div>
+
+        ) : (
+
+          <div
+            style={{
+              marginTop:
+                "20px",
+
+              display:
+                "flex",
+
+              flexDirection:
+                "column",
+
+              gap: "12px",
+            }}
+          >
+
+            {explanationItems.map(
+              (item) => (
+
+                <div
+                  key={
+                    item.id
+                  }
+                  style={{
+                    display:
+                      "flex",
+
+                    justifyContent:
+                      "space-between",
+
+                    alignItems:
+                      "center",
+
+                    padding:
+                      "14px 16px",
+
+                    borderRadius:
+                      "8px",
+
+                    background:
+                      "#f8fafc",
+
+                    border:
+                      "1px solid #e2e8f0",
+                  }}
+                >
+
+                  <span>
+                    {item.label}
+                  </span>
+
+                  {item.value !==
+                    null &&
+                    item.value !==
+                      undefined && (
+
+                      <strong>
+                        {typeof item.value ===
+                        "number"
+                          ? `${item.value > 0 ? "+" : ""}${Number(item.value).toFixed(4)}`
+                          : String(
+                              item.value
+                            )}
+                      </strong>
+
+                    )}
+
+                </div>
+
+              )
+            )}
+
+          </div>
+
+        )}
+
+      </div>
+
+      {/* ================================================= */}
+      {/* CAMPAIGN RECOMMENDATION */}
+      {/* ================================================= */}
+
+      <div
+        className="ci-card"
+        style={{
+          marginTop:
+            "20px",
+        }}
+      >
+
+        <h2>
+          Campaign Recommendation
+        </h2>
+
+        {campaign ? (
+
+          <div className="ci-campaign-recommendation">
+            <div className="ci-campaign-recommendation-title">
+              <div className="ci-campaign-recommendation-icon">
+                <ShieldCheck size={20} />
+              </div>
+              <div>
+                <span>Recommended campaign</span>
+                <h3>{campaignName || campaign?.recommendation || "Campaign assignment"}</h3>
+              </div>
+            </div>
+
+            <div className="ci-campaign-recommendation-details">
+              {campaign?.campaign_priority !== null && campaign?.campaign_priority !== undefined && (
+                <div><span>Priority</span><strong>{campaign.campaign_priority}</strong></div>
+              )}
+              {(campaign?.risk_tier || riskTier) && (
+                <div><span>Risk tier</span><strong>{campaign.risk_tier || riskTier}</strong></div>
+              )}
+              {campaign?.segment_label && (
+                <div><span>Segment</span><strong>{campaign.segment_label}</strong></div>
+              )}
+              {campaign?.reason_code && (
+                <div><span>Reason code</span><strong>{campaign.reason_code}</strong></div>
+              )}
+            </div>
+
+            {(campaign?.description || campaign?.reason || campaign?.message) && (
+              <p className="ci-campaign-recommendation-note">
+                {campaign.description || campaign.reason || campaign.message}
+              </p>
+            )}
+
+            <small className="ci-campaign-source">
+              Source: {data?.campaign_source || "campaign evaluator"}
+            </small>
+            {campaignName && customer.consumer_profile_id && (
+              <div className="ci-campaign-action">
+                {isAdmin ? (
+                  <>
+                    <button
+                      type="button"
+                      className="ci-campaign-assign-button"
+                      onClick={recordCampaignAssignment}
+                      disabled={campaignSaving || timelineLoading || hasCampaignAssignment}
+                    >
+                      <Send size={15} />
+                      {hasCampaignAssignment
+                        ? "Campaign recorded"
+                        : timelineLoading
+                          ? "Checking assignment..."
+                        : campaignSaving
+                          ? "Recording..."
+                          : "Record assignment"}
+                    </button>
+                    <span>This records the assignment in the customer timeline; it does not send a message.</span>
+                  </>
+                ) : (
+                  <span>Ask an Admin to record a campaign assignment.</span>
+                )}
+                {campaignActionError && <p className="ci-inline-error" role="alert">{campaignActionError}</p>}
+                {campaignActionSuccess && <p className="ci-inline-success" role="status">{campaignActionSuccess}</p>}
+              </div>
+            )}
+          </div>
+
+        ) : (
+
+          <div className="ci-campaign-unavailable">
+            No customer-specific campaign assignment is available for this customer.
+          </div>
+
+        )}
+
+      </div>
+
+      {/* ================================================= */}
+      {/* PREDICTION INFORMATION */}
+      {/* ================================================= */}
+
+      <div
+        className="ci-card"
+        style={{
+          marginTop:
+            "20px",
+
+          marginBottom:
+            "30px",
+        }}
+      >
+
+        <h2>
+          Prediction Information
+        </h2>
+
+        <div
+          style={{
+            display:
+              "grid",
+
+            gridTemplateColumns:
+              "repeat(auto-fit, minmax(220px, 1fr))",
+
+            gap: "20px",
+
+            marginTop:
+              "20px",
+          }}
+        >
+
+          {/* MODEL */}
+
+          <div>
+
+            <span
+              style={{
+                color:
+                  "#64748b",
+              }}
+            >
+              Model Version
+            </span>
+
+            <strong
+              style={{
+                display:
+                  "block",
+
+                marginTop:
+                  "8px",
+              }}
+            >
+              {prediction.model_version ||
+                "N/A"}
+            </strong>
+
+          </div>
+
+          {/* SCORED */}
+
+          <div>
+
+            <span
+              style={{
+                color:
+                  "#64748b",
+              }}
+            >
+              Scored At
+            </span>
+
+            <strong
+              style={{
+                display:
+                  "block",
+
+                marginTop:
+                  "8px",
+              }}
+            >
+              {formatDate(
+                prediction.scored_at
+              )}
+            </strong>
+
+          </div>
+
+          {/* THRESHOLD */}
+
+          <div>
+
+            <span
+              style={{
+                color:
+                  "#64748b",
+              }}
+            >
+              Churn Threshold
+            </span>
+
+            <strong
+              style={{
+                display:
+                  "block",
+
+                marginTop:
+                  "8px",
+              }}
+            >
+              {formatProbability(
+                prediction.churn_threshold
+              )}
+            </strong>
+
+          </div>
+
+          {/* SOURCE */}
+
+          <div>
+
+            <span
+              style={{
+                color:
+                  "#64748b",
+              }}
+            >
+              Prediction Source
+            </span>
+
+            <strong
+              style={{
+                display:
+                  "block",
+
+                marginTop:
+                  "8px",
+              }}
+            >
+              {prediction.source ||
+                "N/A"}
+            </strong>
+
+          </div>
+
+        </div>
+
+      </div>
+
+    </div>
+  );
+}
+
+export default CustomerDetails;
